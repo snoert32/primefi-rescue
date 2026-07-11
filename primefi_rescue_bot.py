@@ -6,14 +6,14 @@ Monitort de PrimeFi XDC-pool en trekt AUTOMATISCH je deposit terug
 zodra er liquiditeit vrijkomt. Herhaalt dit tot je volledige positie
 is opgenomen. WXDC wordt automatisch ge-unwrapped naar native XDC.
 
-Alle contractadressen zijn geverifieerd tegen de officiele PrimeFi-docs
+Alle contractadressen zijn geverifieerd tegen de officiële PrimeFi-docs
 en on-chain gecontroleerd (getReserveData bevestigt pWXDC).
 
 VEREISTE ENV VARS:
   PRIVATE_KEY          private key van de wallet met de deposit (0x... of zonder prefix)
 OPTIONELE ENV VARS:
-  TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID   -> pushmeldingen via Telegram
-  SLACK_WEBHOOK_URL                        -> meldingen via Slack
+  TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID   → pushmeldingen via Telegram
+  SLACK_WEBHOOK_URL                        → meldingen via Slack
   MIN_WITHDRAW_XDC     minimum liquiditeit om actie te ondernemen (default 50)
   POLL_SECONDS         polling-interval (default 15)
   DRY_RUN              zet op "1" om alleen te melden, niet te withdrawen
@@ -35,7 +35,7 @@ import urllib.parse
 from web3 import Web3
 from eth_account import Account
 
-# -- Geverifieerde contractadressen (PrimeFi v2, XDC mainnet, chain 50) --
+# ── Geverifieerde contractadressen (PrimeFi v2, XDC mainnet, chain 50) ──
 LENDING_POOL = "0x8a619D8E3BfAb54F7C30Ef39Ce16c53429c739C3"
 WXDC         = "0x951857744785E80e2De051c32EE7b25f9c458C42"
 PWXDC        = "0x1fF5E0037B478547715a4CE337d9fcFF86A30401"  # jouw deposit-token
@@ -46,7 +46,7 @@ RPC_URLS = [
     "https://rpc.xdcrpc.com",
 ]
 
-# -- Config --
+# ── Config ──
 MIN_WITHDRAW_XDC = float(os.environ.get("MIN_WITHDRAW_XDC", "50"))
 POLL_SECONDS     = int(os.environ.get("POLL_SECONDS", "15"))
 DRY_RUN          = os.environ.get("DRY_RUN", "0") == "1"
@@ -57,7 +57,7 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
 SLACK_WEBHOOK_URL  = os.environ.get("SLACK_WEBHOOK_URL", "")
 
-# -- ABIs (minimaal) --
+# ── ABIs (minimaal) ──
 ERC20_ABI = [
     {"constant": True, "inputs": [{"name": "o", "type": "address"}],
      "name": "balanceOf", "outputs": [{"name": "", "type": "uint256"}], "type": "function"},
@@ -142,14 +142,12 @@ def main():
     deposit = pwxdc.functions.balanceOf(acct.address).call() / 1e18
     gas_bal = w3.eth.get_balance(acct.address) / 1e18
     mode = "DRY RUN (alleen melden)" if DRY_RUN else "AUTO-WITHDRAW ACTIEF"
-    notify(f"[BOT] PrimeFi Rescue Bot gestart | {mode}
-"
-           f"Wallet: {acct.address[:10]}...
-"
+    notify(f"🤖 PrimeFi Rescue Bot gestart | {mode}\n"
+           f"Wallet: {acct.address[:10]}...\n"
            f"Positie: {deposit:,.0f} XDC | Gas-saldo: {gas_bal:.2f} XDC")
 
     if gas_bal < 2:
-        notify("[WAARSCHUWING] Minder dan 2 XDC voor gas. "
+        notify("⚠️ Waarschuwing: minder dan 2 XDC voor gas. "
                "Stort wat XDC bij op de wallet, anders falen de transacties.")
 
     total_recovered = 0.0
@@ -161,9 +159,8 @@ def main():
             deposit = deposit_wei / 1e18
 
             if deposit < DUST_XDC:
-                notify(f"[KLAAR] Volledige positie opgenomen. "
-                       f"Totaal deze sessie: {total_recovered:,.2f} XDC.
-"
+                notify(f"✅ KLAAR! Volledige positie opgenomen. "
+                       f"Totaal deze sessie: {total_recovered:,.2f} XDC.\n"
                        f"Advies: verplaats je XDC nu naar een verse wallet.")
                 break
 
@@ -177,12 +174,12 @@ def main():
                 amount = amount_wei / 1e18
 
                 if DRY_RUN:
-                    notify(f"[DRY RUN] {liq:,.0f} XDC beschikbaar - "
+                    notify(f"🚨 [DRY RUN] {liq:,.0f} XDC beschikbaar — "
                            f"zou nu {amount:,.0f} XDC withdrawen.")
                     time.sleep(60)  # niet spammen in dry run
                     continue
 
-                notify(f"[ACTIE] {liq:,.0f} XDC liquiditeit gevonden! "
+                notify(f"🚨 {liq:,.0f} XDC liquiditeit gevonden! "
                        f"Withdraw van {amount:,.0f} XDC wordt verstuurd...")
                 try:
                     r1 = send_tx(w3, acct,
@@ -191,20 +188,19 @@ def main():
                     if r1["status"] != 1:
                         raise RuntimeError(f"withdraw reverted (tx {r1['transactionHash'].hex()})")
 
-                    # Unwrap ontvangen WXDC -> native XDC
+                    # Unwrap ontvangen WXDC → native XDC
                     wxdc_bal = wxdc.functions.balanceOf(acct.address).call()
                     if wxdc_bal > 0:
                         r2 = send_tx(w3, acct,
                                      wxdc.functions.withdraw(wxdc_bal), gas=100_000)
                         if r2["status"] != 1:
-                            notify("[LET OP] Withdraw gelukt maar unwrap faalde - "
+                            notify("⚠️ Withdraw gelukt maar unwrap faalde — "
                                    "je hebt WXDC (ERC-20) in je wallet, handmatig "
                                    "unwrappen kan altijd nog.")
 
                     total_recovered += amount
                     remaining = pwxdc.functions.balanceOf(acct.address).call() / 1e18
-                    notify(f"[SUCCES] {amount:,.2f} XDC opgenomen en ge-unwrapped!
-"
+                    notify(f"✅ {amount:,.2f} XDC opgenomen en ge-unwrapped!\n"
                            f"Totaal gered: {total_recovered:,.2f} XDC | "
                            f"Nog in pool: {remaining:,.2f} XDC")
                     fail_streak = 0
@@ -216,7 +212,7 @@ def main():
                     msg = str(e)[:200]
                     print(f"  withdraw-poging faalde: {msg}", flush=True)
                     if fail_streak == 3:
-                        notify(f"[LET OP] 3 withdraw-pogingen op rij gefaald "
+                        notify(f"⚠️ 3 withdraw-pogingen op rij gefaald "
                                f"(laatste fout: {msg}). Iemand anders kaapt de "
                                f"liquiditeit weg, of er is een contractprobleem. "
                                f"Bot blijft proberen.")
