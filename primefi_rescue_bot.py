@@ -51,6 +51,7 @@ MIN_WITHDRAW_XDC = float(os.environ.get("MIN_WITHDRAW_XDC", "50"))
 POLL_SECONDS     = int(os.environ.get("POLL_SECONDS", "15"))
 DRY_RUN          = os.environ.get("DRY_RUN", "0") == "1"
 SAFETY_MARGIN    = 0.995   # neem 99.5% van beschikbare liquiditeit (race/rente-buffer)
+GAS_LIMIT_WITHDRAW = int(os.environ.get("GAS_LIMIT_WITHDRAW", "1500000"))  # PrimeFi withdraw kost ~912k
 DUST_XDC         = 1.0     # positie < 1 XDC = klaar
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -110,11 +111,17 @@ def connect() -> Web3:
 
 
 def send_tx(w3: Web3, acct, fn, gas: int) -> dict:
-    """Bouw, sign en verstuur een transactie; wacht op receipt."""
+    """Bouw, sign en verstuur een transactie; wacht op receipt.
+    Gas wordt geschat met 30% buffer; 'gas' dient als fallback/minimum."""
+    try:
+        est = fn.estimate_gas({"from": acct.address})
+        gas_limit = max(int(est * 1.3), gas)
+    except Exception:
+        gas_limit = gas
     tx = fn.build_transaction({
         "from": acct.address,
         "nonce": w3.eth.get_transaction_count(acct.address),
-        "gas": gas,
+        "gas": gas_limit,
         "gasPrice": int(w3.eth.gas_price * 1.1),
         "chainId": 50,
     })
@@ -179,12 +186,27 @@ def main():
                     time.sleep(60)  # niet spammen in dry run
                     continue
 
-                notify(f"🚨 {liq:,.0f} XDC liquiditeit gevonden! "
-                       f"Withdraw van {amount:,.0f} XDC wordt verstuurd...")
+                # GRATIS pre-flight: simuleer eerst; alleen versturen als het zou slagen
+                withdraw_fn = pool.functions.withdraw(wxdc_addr, amount_wei, acct.address)
                 try:
-                    r1 = send_tx(w3, acct,
-                                 pool.functions.withdraw(wxdc_addr, amount_wei, acct.address),
-                                 gas=600_000)
+                    withdraw_fn.call({"from": acct.address, "gas": GAS_LIMIT_WITHDRAW})
+                except Exception as e:
+                    fail_streak += 1
+                    print(f"  simulatie faalt (geen gas verbruikt): {str(e)[:120]}", flush=True)
+                    time.sleep(min(2 * fail_streak, 30))  # backoff, max 30s
+                    continue
+
+                gas_bal_now = w3.eth.get_balance(acct.address) / 1e18
+                if gas_bal_now < 0.5:
+                    notify(f"⚠️ Gas-saldo kritiek laag ({gas_bal_now:.3f} XDC). "
+                           f"Bot pauzeert versturen tot je XDC bijstort.")
+                    time.sleep(120)
+                    continue
+
+                notify(f"🚨 {liq:,.0f} XDC liquiditeit gevonden! "
+                       f"Simulatie geslaagd — withdraw van {amount:,.0f} XDC wordt verstuurd...")
+                try:
+                    r1 = send_tx(w3, acct, withdraw_fn, gas=GAS_LIMIT_WITHDRAW)
                     if r1["status"] != 1:
                         raise RuntimeError(f"withdraw reverted (tx {r1['transactionHash'].hex()})")
 
@@ -192,7 +214,7 @@ def main():
                     wxdc_bal = wxdc.functions.balanceOf(acct.address).call()
                     if wxdc_bal > 0:
                         r2 = send_tx(w3, acct,
-                                     wxdc.functions.withdraw(wxdc_bal), gas=100_000)
+                                     wxdc.functions.withdraw(wxdc_bal), gas=150_000)
                         if r2["status"] != 1:
                             notify("⚠️ Withdraw gelukt maar unwrap faalde — "
                                    "je hebt WXDC (ERC-20) in je wallet, handmatig "
